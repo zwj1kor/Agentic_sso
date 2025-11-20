@@ -1,0 +1,212 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <title>MCP SSO Demo</title>
+    <link href="https://fonts.googleapis.com/css2?family=Roboto:wght@400;700&display=swap" rel="stylesheet">
+    <style>
+        body {
+            font-family: 'Roboto', Arial, sans-serif;
+            background: linear-gradient(120deg, #f8fafc 0%, #e0e7ef 100%);
+            margin: 0;
+            min-height: 100vh;
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+        }
+        .container {
+            background: #fff;
+            margin-top: 48px;
+            padding: 32px 40px;
+            border-radius: 18px;
+            box-shadow: 0 8px 32px rgba(60, 80, 120, 0.12);
+            max-width: 420px;
+            width: 100%;
+        }
+        h1 {
+            color: #2a4365;
+            font-size: 2.2rem;
+            margin-bottom: 0.5em;
+            text-align: center;
+        }
+        .desc {
+            color: #4a5568;
+            font-size: 1.1rem;
+            margin-bottom: 2em;
+            text-align: center;
+        }
+        .actions {
+            display: flex;
+            flex-direction: column;
+            gap: 16px;
+            margin-bottom: 2em;
+        }
+        button {
+            background: linear-gradient(90deg, #4f8cff 0%, #2356c7 100%);
+            color: #fff;
+            border: none;
+            border-radius: 8px;
+            padding: 14px 0;
+            font-size: 1.1rem;
+            font-weight: 700;
+            cursor: pointer;
+            transition: background 0.2s, box-shadow 0.2s;
+            box-shadow: 0 2px 8px rgba(79, 140, 255, 0.08);
+        }
+        button:hover {
+            background: linear-gradient(90deg, #2356c7 0%, #4f8cff 100%);
+        }
+        .output-label {
+            color: #2a4365;
+            font-weight: 700;
+            margin-bottom: 0.5em;
+        }
+        pre {
+            background: #f1f5f9;
+            color: #2d3748;
+            border-radius: 8px;
+            padding: 18px;
+            font-size: 1rem;
+            min-height: 80px;
+            max-height: 260px;
+            overflow: auto;
+        }
+        @media (max-width: 600px) {
+            .container {
+                padding: 18px 6vw;
+            }
+        }
+    </style>
+</head>
+<body>
+    <div class="container" id="mainContainer">
+        <h1>MCP SSO Demo</h1>
+        <div class="desc" id="desc">
+            Secure Single Sign-On via MCP tools.<br>
+            Try the flow below:
+        </div>
+        <div class="actions" id="actions">
+            <button onclick="startSSO()">🔑 Start SSO</button>
+            <button onclick="getMe()">👤 Get User Info</button>
+            <button onclick="logout()">🚪 Logout</button>
+        </div>
+        <div class="output-label" id="outputLabel">Result:</div>
+        <pre id="output">Click a button to begin...</pre>
+        <button id="backBtn" style="display:none; margin-top:2em;" onclick="window.location='mcp_sso_test.html'">
+            Back to SSO Demo
+        </button>
+    </div>
+
+    <script>
+        // MCP SSO Agent server address
+        const MCP_BASE = 'http://localhost:8090';
+
+        // Helper to get query params
+        function getQueryParam(name) {
+            const url = new URL(window.location.href);
+            return url.searchParams.get(name);
+        }
+
+        const code = getQueryParam('code');
+        const state = getQueryParam('state');
+        const mainContainer = document.getElementById('mainContainer');
+        const output = document.getElementById('output');
+        const desc = document.getElementById('desc');
+        const actions = document.getElementById('actions');
+        const outputLabel = document.getElementById('outputLabel');
+        const backBtn = document.getElementById('backBtn');
+
+        // If we just returned from Azure with a ?code=..., complete the callback via MCP
+        if (code) {
+            desc.innerHTML = 'Completing your sign-in. Please wait...';
+            actions.style.display = 'none';
+            outputLabel.textContent = 'Callback Result:';
+            backBtn.style.display = 'none';
+            output.textContent = 'Processing...';
+
+            (async function sendCallback() {
+                const payload = { code: code };
+                if (state) payload.state = state;
+
+                try {
+                    const res = await fetch(MCP_BASE + '/sso_callback', {
+                        method: 'POST',
+                        headers: { 'Content-Type': 'application/json' },
+                        body: JSON.stringify(payload)
+                    });
+                    const data = await res.json();
+                    if (data.status === 'OK') {
+                        output.innerHTML = '✅ <b>Sign-in complete!</b> You may now return to the demo page.';
+                    } else {
+                        output.innerHTML = '<span style="color:#c53030">' +
+                            (data.error || JSON.stringify(data)) +
+                            '</span>';
+                    }
+                } catch (e) {
+                    console.error(e);
+                    output.innerHTML = '<span style="color:#c53030">Error contacting MCP server.</span>';
+                }
+                backBtn.style.display = 'inline-block';
+            })();
+        }
+
+        async function startSSO() {
+            output.textContent = 'Loading...';
+            try {
+                const res = await fetch(MCP_BASE + '/sso_login', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' }
+                });
+
+                if (!res.ok) {
+                    const text = await res.text();
+                    output.textContent = `HTTP error ${res.status}: ${text}`;
+                    console.error('HTTP error from /sso_login', res.status, text);
+                    return;
+                }
+
+                const data = await res.json();
+                console.log('sso_login response:', data);
+                if (data.auth_url) {
+                    // Open Azure sign-in. If popup blocked, you can change this to window.location = data.auth_url;
+                    window.open(data.auth_url, '_blank');
+                }
+                output.textContent = JSON.stringify(data, null, 2);
+            } catch (e) {
+                console.error(e);
+                output.textContent = 'Fetch failed: ' + e;
+            }
+        }
+
+        async function getMe() {
+            output.textContent = 'Loading...';
+            try {
+                const res = await fetch(MCP_BASE + '/sso_me', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' }
+                });
+                const data = await res.json();
+                output.textContent = JSON.stringify(data, null, 2);
+            } catch (e) {
+                console.error(e);
+                output.textContent = 'Error calling sso_me';
+            }
+        }
+
+        async function logout() {
+            output.textContent = 'Loading...';
+            try {
+                const res = await fetch(MCP_BASE + '/sso_logout', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' }
+                });
+                const data = await res.json();
+                output.textContent = JSON.stringify(data, null, 2);
+            } catch (e) {
+                console.error(e);
+                output.textContent = 'Error calling sso_logout';
+            }
+        }
+    </script>
+</body>
+</html>
