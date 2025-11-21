@@ -1,7 +1,8 @@
-fastapi==0.109.0
-uvicorn[standard]==0.27.0
-msal==1.26.0
-python-dotenv==1.0.0
-PyJWT==2.8.0
-httpx==0.26.0
-urllib3==2.1.0
+fastapi
+uvicorn[standard]
+msal
+python-dotenv
+httpx
+fastmcp
+pyjwt
+# Python 3.13.7

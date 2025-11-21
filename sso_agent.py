@@ -1,17 +1,39 @@
 import os
 import logging
 from typing import Optional, Dict, Any
+import socket
 
 import httpx
 from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
+from dotenv import load_dotenv
+
+load_dotenv()
 
 # ---------------------------------------------------------------------------
 # Config
 # ---------------------------------------------------------------------------
 
 BACKEND_BASE_URL = os.getenv("BACKEND_BASE_URL", "http://localhost:8000")
+
+# Test if backend port is reachable
+def test_backend_port():
+    """Test if backend port 8000 is reachable"""
+    try:
+        sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+        sock.settimeout(2)
+        result = sock.connect_ex(('127.0.0.1', 8000))
+        sock.close()
+        if result == 0:
+            logger.info("✅ Backend port 8000 is REACHABLE")
+            return True
+        else:
+            logger.error(f"❌ Backend port 8000 is NOT reachable (error code: {result})")
+            return False
+    except Exception as e:
+        logger.error(f"❌ Cannot test backend port: {e}")
+        return False
 
 LOG_LEVEL = os.getenv("LOG_LEVEL", "info").upper()
 logging.basicConfig(
@@ -57,7 +79,14 @@ def handle_sso_login() -> dict:
     """
     try:
         logger.info(f"Calling backend /auth/login at {BACKEND_BASE_URL}")
-        with httpx.Client(base_url=BACKEND_BASE_URL, follow_redirects=False, timeout=30.0) as client:
+        # Disable SSL verification and set HTTP/1.1 explicitly
+        with httpx.Client(
+            base_url=BACKEND_BASE_URL, 
+            follow_redirects=False, 
+            timeout=30.0,
+            verify=False,
+            http2=False
+        ) as client:
             resp = client.get("/auth/login")
             
             logger.info(f"Backend response status: {resp.status_code}")
@@ -105,7 +134,13 @@ def handle_sso_callback(code: str, state: Optional[str] = None) -> dict:
         if state:
             params["state"] = state
 
-        with httpx.Client(base_url=BACKEND_BASE_URL, follow_redirects=False, timeout=30.0) as client:
+        with httpx.Client(
+            base_url=BACKEND_BASE_URL, 
+            follow_redirects=False, 
+            timeout=30.0,
+            verify=False,
+            http2=False
+        ) as client:
             resp = client.get("/auth/callback", params=params)
 
             logger.info(f"Callback response status: {resp.status_code}")
@@ -147,7 +182,13 @@ def handle_sso_me() -> dict:
     """
     try:
         logger.info(f"Calling /auth/me with {len(session_cookies)} cookies")
-        with httpx.Client(base_url=BACKEND_BASE_URL, cookies=session_cookies, timeout=30.0) as client:
+        with httpx.Client(
+            base_url=BACKEND_BASE_URL, 
+            cookies=session_cookies, 
+            timeout=30.0,
+            verify=False,
+            http2=False
+        ) as client:
             resp = client.get("/auth/me")
             result = resp.json()
             
@@ -175,7 +216,13 @@ def handle_sso_logout() -> dict:
     """
     try:
         logger.info("Logging out user")
-        with httpx.Client(base_url=BACKEND_BASE_URL, cookies=session_cookies, timeout=30.0) as client:
+        with httpx.Client(
+            base_url=BACKEND_BASE_URL, 
+            cookies=session_cookies, 
+            timeout=30.0,
+            verify=False,
+            http2=False
+        ) as client:
             resp = client.post("/auth/logout")
             session_cookies.clear()
             logger.info("User logged out, session cleared")
@@ -283,4 +330,9 @@ if __name__ == "__main__":
     logger.info("Starting SSO Agent on port 8090")
     logger.info(f"Backend URL: {BACKEND_BASE_URL}")
     logger.info("=" * 60)
+    
+    # Test backend connectivity
+    logger.info("Testing backend connectivity...")
+    test_backend_port()
+    
     uvicorn.run(app, host="0.0.0.0", port=8090)

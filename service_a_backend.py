@@ -2,6 +2,8 @@ import os
 import jwt
 import logging
 import secrets
+import hashlib
+import base64
 from typing import Optional
 
 from fastapi import FastAPI, Request, Response, HTTPException, status, Cookie
@@ -67,6 +69,21 @@ logger = logging.getLogger(__name__)
 
 # Session state storage (demo: in-memory)
 session_states = {}
+# PKCE code verifier storage (state -> code_verifier)
+pkce_verifiers = {}
+
+
+def generate_pkce_pair():
+    """Generate PKCE code_verifier and code_challenge"""
+    # Generate a random code_verifier (43-128 characters)
+    code_verifier = base64.urlsafe_b64encode(secrets.token_bytes(32)).decode('utf-8').rstrip('=')
+    
+    # Generate code_challenge from code_verifier using SHA256
+    code_challenge = base64.urlsafe_b64encode(
+        hashlib.sha256(code_verifier.encode('utf-8')).digest()
+    ).decode('utf-8').rstrip('=')
+    
+    return code_verifier, code_challenge
 
 
 @app.get("/health")
@@ -77,7 +94,7 @@ def health():
 @app.get("/auth/login")
 def auth_login():
     """
-    Start login: return a redirect to Azure authorize endpoint.
+    Start login: return a redirect to Azure authorize endpoint with PKCE.
     The redirect_uri here MUST match REDIRECT_URI / Entra app config.
     """
     app_msal = ConfidentialClientApplication(
@@ -86,14 +103,26 @@ def auth_login():
         client_credential=CLIENT_SECRET,
         verify=not DISABLE_SSL_VERIFY,
     )
+    
+    # Generate PKCE pair
+    code_verifier, code_challenge = generate_pkce_pair()
+    
     state = secrets.token_urlsafe(32)
     session_states[state] = True
+    
+    # Store code_verifier for this state
+    pkce_verifiers[state] = code_verifier
+    
     auth_url = app_msal.get_authorization_request_url(
         scopes=SCOPE,
         redirect_uri=REDIRECT_URI,
         state=state,
     )
-    logger.info(f"Login initiated with state: {state[:10]}...")
+    
+    # Add PKCE parameters to the auth URL
+    auth_url += f"&code_challenge={code_challenge}&code_challenge_method=S256"
+    
+    logger.info(f"Login initiated with state: {state[:10]}... and PKCE")
     return RedirectResponse(auth_url)
 
 
@@ -114,10 +143,12 @@ def auth_callback(
     if not code:
         raise HTTPException(status_code=400, detail="Missing code")
 
-    # Validate state
+    # Validate state and retrieve code_verifier
+    code_verifier = None
     if state and state in session_states:
         session_states.pop(state)
-        logger.info(f"State validated: {state[:10]}...")
+        code_verifier = pkce_verifiers.pop(state, None)
+        logger.info(f"State validated: {state[:10]}... with PKCE")
     else:
         logger.warning(f"Invalid or missing state: {state}")
 
@@ -128,11 +159,18 @@ def auth_callback(
         verify=not DISABLE_SSL_VERIFY,
     )
 
-    result = app_msal.acquire_token_by_authorization_code(
-        code,
-        scopes=SCOPE,
-        redirect_uri=REDIRECT_URI,
-    )
+    # Include code_verifier in token request for PKCE
+    token_request_data = {
+        "code": code,
+        "scopes": SCOPE,
+        "redirect_uri": REDIRECT_URI,
+    }
+    
+    if code_verifier:
+        token_request_data["code_verifier"] = code_verifier
+        logger.info("Using PKCE code_verifier for token exchange")
+
+    result = app_msal.acquire_token_by_authorization_code(**token_request_data)
 
     if "id_token" not in result:
         logger.error(f"Token acquisition failed: {result.get('error')}")
@@ -195,3 +233,25 @@ def auth_logout(response: Response):
     response.delete_cookie(COOKIE_NAME)
     logger.info("User logged out")
     return {"status": "ok"}
+
+
+@app.get("/post-login")
+def post_login():
+    """Simple success page after login"""
+    return {"status": "ok", "message": "Login successful"}
+
+
+# ---------------------------------------------------------------------------
+# Entrypoint
+# ---------------------------------------------------------------------------
+
+if __name__ == "__main__":
+    import uvicorn
+
+    print("=" * 60)
+    print("🚀 Starting Backend Server on port 8000")
+    print(f"📡 Redirect URI: {REDIRECT_URI}")
+    print(f"📡 Authority: {AUTHORITY}")
+    print("=" * 60)
+    
+    uvicorn.run(app, host="0.0.0.0", port=8000, log_level=LOG_LEVEL.lower())
